@@ -1,0 +1,79 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [ published ]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'pnpm'
+        
+    - name: Install pnpm
+      uses: pnpm/action-setup@v2
+      with:
+        version: latest
+        
+    - name: Install dependencies
+      run: pnpm install
+      
+    - name: Build application
+      run: pnpm build
+      
+    - name: Build Electron app
+      run: |
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          pnpm build:linux
+        elif [ "$RUNNER_OS" == "Windows" ]; then
+          pnpm build:win
+        elif [ "$RUNNER_OS" == "macOS" ]; then
+          pnpm build:mac
+        fi
+      shell: bash
+      
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-${{ matrix.os }}
+        path: |
+          dist/*.exe
+          dist/*.dmg
+          dist/*.AppImage
+          dist/*.deb
+          dist/*.rpm
+          dist/*.zip
+          dist/*.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          app-*/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title></title>
+  <style>
+    html, body {
+      background: transparent !important;  /* Remove the rgba overlay */
+      margin: 0; 
+      padding: 0;
+      width: fit-content;
+      height: fit-content;
+      -webkit-app-region: drag;
+    }
+
+    #root {
+      display: inline-block;
+      width: fit-content;
+      height: fit-content;
+      -webkit-app-region: no-drag;
+      overflow: hidden; /* Prevent any scrollbars on root */
+    }
+
+    /* Hide all scrollbars globally except for shadcn ScrollArea */
+    * {
+      box-sizing: border-box;
+    }
+    
+    /* Hide default scrollbars but keep shadcn scroll functionality */
+    *:not([data-radix-scroll-area-viewport])::-webkit-scrollbar {
+      display: none;
+    }
+    
+    *:not([data-radix-scroll-area-viewport]) {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+
+  </style>
+</head>
+<body>
+  <!-- <div id="drag-region"></div> -->
+  <div style="width:100%;height:100%;" id="root"></div>
+  <script type="module" src="./src/floating-templates.tsx"></script>
+</body>
+</html>
