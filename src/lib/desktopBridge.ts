@@ -1,24 +1,29 @@
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window'
+import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
-import {
-  isRegistered,
-  register,
-  unregisterAll
-} from '@tauri-apps/plugin-global-shortcut'
+import { isRegistered } from '@tauri-apps/plugin-global-shortcut'
 
 import type { DesktopApi, Template } from '@/types/global'
 
 const FLOATING_WINDOW_LABEL = 'floating-templates'
 const PINNED_TEMPLATES_KEY = 'akel-pinned-templates'
 const FLOATING_WINDOW_MANUAL_SIZE_KEY = 'akel-floating-window-manual-size'
+const TEMPLATE_SHORTCUT_TRIGGERED_EVENT = 'template-shortcut-triggered'
+const TEMPLATE_SHORTCUT_DEBUG_EVENT = 'template-shortcut-debug'
 const listenerRegistry = new Map<string, Array<() => void>>()
-const shortcutCallbacks = new Set<
-  (data: { templateId: string; title: string; shortcut: string }) => void
->()
+let shortcutRegistrationGeneration = 0
+let shortcutRegistrationQueue: Promise<unknown> = Promise.resolve()
 
 type ShortcutTemplate = Pick<Template, 'id' | 'title' | 'content' | 'shortcut'>
+type NativeShortcutRegistration = {
+  templateId: string
+  title: string
+  content: string
+  shortcut: string
+}
 
 function storePinnedTemplates(templates: Template[]): void {
   localStorage.setItem(PINNED_TEMPLATES_KEY, JSON.stringify(templates))
@@ -202,53 +207,77 @@ const desktopApi: DesktopApi = {
   async copyToClipboard(text) {
     await writeText(text)
   },
-  async registerGlobalShortcuts(templates, settings = {}) {
-    await unregisterAll()
+  async registerGlobalShortcuts(templates) {
+    const generation = ++shortcutRegistrationGeneration
 
-    const shortcutTemplates = new Map<string, ShortcutTemplate>()
-    const seenShortcuts = new Set<string>()
-    let registeredCount = 0
+    const runRegistration = async () => {
+      const seenShortcuts = new Set<string>()
+      const registrations: NativeShortcutRegistration[] = []
 
-    for (const template of templates) {
-      if (!template.shortcut) continue
+      for (const template of templates) {
+        if (!template.shortcut) continue
 
-      const normalizedShortcut = normalizeShortcut(template.shortcut)
-      if (!normalizedShortcut || seenShortcuts.has(normalizedShortcut)) continue
+        const normalizedShortcut = normalizeShortcut(template.shortcut)
+        if (!normalizedShortcut || seenShortcuts.has(normalizedShortcut)) continue
 
-      seenShortcuts.add(normalizedShortcut)
-      shortcutTemplates.set(normalizedShortcut, template)
+        seenShortcuts.add(normalizedShortcut)
 
-      await register(normalizedShortcut, async (event) => {
-        if (event.state !== 'Pressed') return
+        if (generation !== shortcutRegistrationGeneration) {
+          return { success: true, registeredCount: 0, skipped: true }
+        }
 
-        const matchedTemplate = shortcutTemplates.get(event.shortcut)
-        if (!matchedTemplate) return
+        registrations.push({
+          templateId: template.id,
+          title: template.title,
+          content: template.content,
+          shortcut: normalizedShortcut
+        })
+      }
 
-        await writeText(matchedTemplate.content)
-
-        shortcutCallbacks.forEach((callback) =>
-          callback({
-            templateId: matchedTemplate.id,
-            title: matchedTemplate.title,
-            shortcut: matchedTemplate.shortcut ?? event.shortcut
-          })
-        )
-
+      const result = await invoke<{
+        success: boolean
+        registeredCount: number
+        failedShortcuts?: Array<{ shortcut: string; error: string }>
+      }>('sync_template_shortcuts', {
+        shortcuts: registrations
       })
 
-      registeredCount += 1
+      if (result.failedShortcuts?.length) {
+        console.warn('Some global shortcuts could not be registered:', result.failedShortcuts)
+      }
+
+      console.debug('Global shortcut registration result:', result)
+
+      return result
     }
 
-    return { success: true, registeredCount }
+    const queuedRegistration = shortcutRegistrationQueue
+      .catch(() => undefined)
+      .then(runRegistration)
+
+    shortcutRegistrationQueue = queuedRegistration
+    return queuedRegistration
   },
   async unregisterGlobalShortcuts() {
-    await unregisterAll()
+    await invoke('clear_template_shortcuts')
   },
   async checkShortcutConflict(shortcut) {
     return isRegistered(normalizeShortcut(shortcut))
   },
   onShortcutTriggered(callback) {
-    shortcutCallbacks.add(callback)
+    listen<{
+      templateId: string
+      title: string
+      shortcut: string
+    }>(TEMPLATE_SHORTCUT_TRIGGERED_EVENT, (event) => callback(event.payload))
+      .then((unlisten) => {
+        const listeners = listenerRegistry.get(TEMPLATE_SHORTCUT_TRIGGERED_EVENT) ?? []
+        listeners.push(unlisten)
+        listenerRegistry.set(TEMPLATE_SHORTCUT_TRIGGERED_EVENT, listeners)
+      })
+      .catch((error) => {
+        console.error('Failed to listen for template-shortcut-triggered:', error)
+      })
   },
   onTemplateData() {},
   onTemplatesData(callback) {
@@ -278,6 +307,39 @@ const desktopApi: DesktopApi = {
 
 export async function installDesktopBridge(): Promise<void> {
   if (window.api) return
+
+  listen<{
+    templateId: string
+    title: string
+    shortcut: string
+  }>(TEMPLATE_SHORTCUT_TRIGGERED_EVENT, (event) => {
+    console.debug('Template shortcut triggered:', event.payload)
+  })
+    .then((unlisten) => {
+      const listeners = listenerRegistry.get(TEMPLATE_SHORTCUT_TRIGGERED_EVENT) ?? []
+      listeners.push(unlisten)
+      listenerRegistry.set(TEMPLATE_SHORTCUT_TRIGGERED_EVENT, listeners)
+    })
+    .catch((error) => {
+      console.error('Failed to attach template shortcut debug listener:', error)
+    })
+
+  listen<{
+    templateId: string
+    shortcut: string
+    stage: string
+    message?: string | null
+  }>(TEMPLATE_SHORTCUT_DEBUG_EVENT, (event) => {
+    console.debug('Template shortcut debug:', event.payload)
+  })
+    .then((unlisten) => {
+      const listeners = listenerRegistry.get(TEMPLATE_SHORTCUT_DEBUG_EVENT) ?? []
+      listeners.push(unlisten)
+      listenerRegistry.set(TEMPLATE_SHORTCUT_DEBUG_EVENT, listeners)
+    })
+    .catch((error) => {
+      console.error('Failed to attach template shortcut debug listener:', error)
+    })
 
   window.api = desktopApi
   window.electron = {

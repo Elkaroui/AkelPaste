@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Keyboard } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,10 +12,92 @@ interface ShortcutRecorderProps {
   language: Language
 }
 
+const MODIFIER_KEYS = ['Ctrl', 'Alt', 'Shift', 'Meta']
+const MODIFIER_FALLBACK_WINDOW_MS = 350
+
+function normalizeShortcutValue(shortcut: string): string {
+  return shortcut
+    .split('+')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      switch (part.toLowerCase()) {
+        case 'control':
+        case 'ctrl':
+          return 'Ctrl'
+        case 'command':
+        case 'cmd':
+        case 'super':
+        case 'meta':
+          return 'Meta'
+        case 'alt':
+          return 'Alt'
+        case 'shift':
+          return 'Shift'
+        default:
+          return part.length === 1 ? part.toUpperCase() : part
+      }
+    })
+    .join(' + ')
+}
+
+function getShortcutKey(event: KeyboardEvent): string | null {
+  if (event.code.startsWith('Digit')) {
+    return event.code.replace('Digit', '')
+  }
+
+  if (event.code.startsWith('Numpad')) {
+    return event.code.replace('Numpad', '')
+  }
+
+  if (event.code.startsWith('Key')) {
+    return event.code.replace('Key', '')
+  }
+
+  switch (event.code) {
+    case 'Space':
+      return 'Space'
+    case 'Minus':
+      return '-'
+    case 'Equal':
+      return '='
+    case 'Comma':
+      return ','
+    case 'Period':
+      return '.'
+    case 'Slash':
+      return '/'
+    case 'Semicolon':
+      return ';'
+    case 'Quote':
+      return "'"
+    case 'BracketLeft':
+      return '['
+    case 'BracketRight':
+      return ']'
+    case 'Backslash':
+      return '\\'
+    case 'Backquote':
+      return '`'
+    default:
+      break
+  }
+
+  if (!['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) {
+    return event.key.length === 1 ? event.key.toUpperCase() : event.key
+  }
+
+  return null
+}
+
 export function ShortcutRecorder({ value, onChange, existingShortcuts = [], language }: ShortcutRecorderProps) {
   const { t } = useTranslation(language)
   const [isRecording, setIsRecording] = useState(false)
   const [recordedKeys, setRecordedKeys] = useState<string[]>([])
+  const recordedKeysRef = useRef<string[]>([])
+  const modifierSnapshotRef = useRef<{ keys: string[]; timestamp: number } | null>(null)
+  const normalizedExistingShortcuts = existingShortcuts.map(normalizeShortcutValue)
+  const normalizedCurrentValue = normalizeShortcutValue(value)
 
   useEffect(() => {
     if (!isRecording) return
@@ -24,6 +106,13 @@ export function ShortcutRecorder({ value, onChange, existingShortcuts = [], lang
       e.preventDefault()
       e.stopPropagation()
 
+      if (e.key === 'Escape') {
+        setIsRecording(false)
+        setRecordedKeys([])
+        recordedKeysRef.current = []
+        return
+      }
+
       const keys: string[] = []
       
       // Add modifier keys
@@ -31,104 +120,122 @@ export function ShortcutRecorder({ value, onChange, existingShortcuts = [], lang
       if (e.altKey) keys.push('Alt')
       if (e.shiftKey) keys.push('Shift')
       if (e.metaKey) keys.push('Meta')
-      
-      // Add the main key (if it's not a modifier)
-      if (!['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
-        keys.push(e.key.toUpperCase())
-      }
-      
-      setRecordedKeys(keys)
-    }
 
-    const handleKeyUp = async (e: KeyboardEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-      
-      // Only finish recording if we have at least one non-modifier key and all modifier keys are released
-      if (recordedKeys.length > 0 && !['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
-        // Wait a bit to ensure all keys are captured properly
-        setTimeout(() => {
-          const shortcut = recordedKeys.join(' + ')
-          
-          // Validate that we have a complete shortcut (at least one non-modifier key)
-          const hasNonModifier = recordedKeys.some(key => !['Ctrl', 'Alt', 'Shift', 'Meta'].includes(key))
-          if (!hasNonModifier) {
-            toast.error(t('includeNonModifierKey'))
-            setIsRecording(false)
-            setRecordedKeys([])
-            return
-          }
-          
-          // Check if this shortcut conflicts with existing ones
-           if (shortcut === value) {
-             toast.error(t('shortcutAlreadyAssigned'))
-             setIsRecording(false)
-             setRecordedKeys([])
-             return
-           }
-           
-           // Check if shortcut is already used by another template
-           if (existingShortcuts.includes(shortcut)) {
-             toast.error(t('keyboardShortcutAlreadyUsed'))
-             setIsRecording(false)
-             setRecordedKeys([])
-             return
-           }
-           
-           // Check for common system shortcuts that should be avoided
-           const systemShortcuts = ['Ctrl + C', 'Ctrl + V', 'Ctrl + X', 'Ctrl + Z', 'Ctrl + Y', 'Ctrl + A', 'Ctrl + S']
-           if (systemShortcuts.includes(shortcut)) {
-             toast.error(t('systemShortcutCannotBeUsed'))
-             setIsRecording(false)
-             setRecordedKeys([])
-             return
-           }
-          
-          try {
-            console.log('Recording shortcut:', shortcut)
-            onChange(shortcut)
-            setIsRecording(false)
-            setRecordedKeys([])
-            // Removed success toast to reduce clutter
-          } catch (error) {
-            console.error('Error recording shortcut:', error)
-            toast.error(t('errorRecordingShortcut'))
-            setIsRecording(false)
-            setRecordedKeys([])
-          }
-        }, 100) // Small delay to ensure all keys are captured
-      }
-    }
+      const now = Date.now()
+      const shortcutKey = getShortcutKey(e)
 
-    // Handle escape to cancel recording
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (!shortcutKey && keys.length > 0) {
+        modifierSnapshotRef.current = {
+          keys: [...keys],
+          timestamp: now
+        }
+      }
+
+      let finalKeys = [...keys]
+      const recentModifierSnapshot =
+        modifierSnapshotRef.current &&
+        now - modifierSnapshotRef.current.timestamp <= MODIFIER_FALLBACK_WINDOW_MS
+          ? modifierSnapshotRef.current.keys
+          : null
+
+      if (shortcutKey && finalKeys.length === 0 && recentModifierSnapshot?.length) {
+        finalKeys = [...recentModifierSnapshot]
+      }
+
+      if (shortcutKey && !finalKeys.includes(shortcutKey)) {
+        finalKeys.push(shortcutKey)
+      }
+
+      recordedKeysRef.current = finalKeys
+      setRecordedKeys(finalKeys)
+
+      if (!shortcutKey) {
+        return
+      }
+
+      const shortcut = finalKeys.join(' + ')
+      const hasNonModifier = finalKeys.some(key => !MODIFIER_KEYS.includes(key))
+      if (!hasNonModifier) {
+        toast.error(t('includeNonModifierKey'))
         setIsRecording(false)
         setRecordedKeys([])
-        // Removed cancellation toast to reduce clutter
+        recordedKeysRef.current = []
+        modifierSnapshotRef.current = null
+        return
+      }
+
+      const normalizedShortcut = normalizeShortcutValue(shortcut)
+
+      if (normalizedShortcut === normalizedCurrentValue) {
+        toast.error(t('shortcutAlreadyAssigned'))
+        setIsRecording(false)
+        setRecordedKeys([])
+        recordedKeysRef.current = []
+        modifierSnapshotRef.current = null
+        return
+      }
+
+      if (normalizedExistingShortcuts.includes(normalizedShortcut)) {
+        toast.error(t('keyboardShortcutAlreadyUsed'))
+        setIsRecording(false)
+        setRecordedKeys([])
+        recordedKeysRef.current = []
+        modifierSnapshotRef.current = null
+        return
+      }
+
+      const systemShortcuts = ['Ctrl + C', 'Ctrl + V', 'Ctrl + X', 'Ctrl + Z', 'Ctrl + Y', 'Ctrl + A', 'Ctrl + S']
+      if (systemShortcuts.includes(normalizedShortcut)) {
+        toast.error(t('systemShortcutCannotBeUsed'))
+        setIsRecording(false)
+        setRecordedKeys([])
+        recordedKeysRef.current = []
+        modifierSnapshotRef.current = null
+        return
+      }
+
+      try {
+        console.log('Recording shortcut:', shortcut)
+        onChange(normalizedShortcut)
+        setIsRecording(false)
+        setRecordedKeys([])
+        recordedKeysRef.current = []
+        modifierSnapshotRef.current = null
+      } catch (error) {
+        console.error('Error recording shortcut:', error)
+        toast.error(t('errorRecordingShortcut'))
+        setIsRecording(false)
+        setRecordedKeys([])
+        recordedKeysRef.current = []
+        modifierSnapshotRef.current = null
       }
     }
 
-    document.addEventListener('keydown', handleKeyDown)
-    document.addEventListener('keyup', handleKeyUp)
-    document.addEventListener('keydown', handleEscape)
+    window.addEventListener('keydown', handleKeyDown, true)
 
     return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      document.removeEventListener('keyup', handleKeyUp)
-      document.removeEventListener('keydown', handleEscape)
+      window.removeEventListener('keydown', handleKeyDown, true)
     }
-  }, [isRecording, recordedKeys, onChange])
+  }, [isRecording, normalizedCurrentValue, normalizedExistingShortcuts, onChange, t])
 
   const startRecording = () => {
+    const activeElement = document.activeElement
+    if (activeElement instanceof HTMLElement) {
+      activeElement.blur()
+    }
+
     setIsRecording(true)
     setRecordedKeys([])
-    // Removed instruction toast to reduce clutter
+    recordedKeysRef.current = []
+    modifierSnapshotRef.current = null
+    window.setTimeout(() => window.focus(), 0)
   }
 
   const clearShortcut = () => {
     setIsRecording(false)
     setRecordedKeys([])
+    recordedKeysRef.current = []
+    modifierSnapshotRef.current = null
     onChange('')
     // Removed clear confirmation toast to reduce clutter
   }
@@ -146,6 +253,9 @@ export function ShortcutRecorder({ value, onChange, existingShortcuts = [], lang
         variant="outline"
         size="icon"
         onClick={startRecording}
+        onMouseDown={(event) => {
+          event.preventDefault()
+        }}
         disabled={isRecording}
       >
         <Keyboard size={16} />

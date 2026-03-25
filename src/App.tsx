@@ -51,6 +51,7 @@ function App(): React.JSX.Element {
   const [showTemplateContent, setShowTemplateContent] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null)
+  const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false)
 
   const { t } = useTranslation(language)
 
@@ -75,6 +76,7 @@ function App(): React.JSX.Element {
     setLanguage(data.settings.language || 'en')
     setEmojiFolder(data.settings.emojiFolder || './src/assets/emoji')
     setShowTemplateContent(data.settings.showTemplateContent !== false)
+    setHasLoadedInitialData(true)
 
     return () => {
       if (window.api?.unregisterGlobalShortcuts) {
@@ -99,13 +101,17 @@ function App(): React.JSX.Element {
 
     dataManager.saveData(data)
 
-    if (window.api?.registerGlobalShortcuts) {
-      const settings = { pinTemplates, theme }
-      window.api.registerGlobalShortcuts(templates, settings).catch((error) => {
-        console.error('Error registering global shortcuts:', error)
-      })
-    }
   }, [templates, collections, theme, pinTemplates, language, emojiFolder, showTemplateContent])
+
+  useEffect(() => {
+    if (!hasLoadedInitialData || !window.api?.registerGlobalShortcuts) {
+      return
+    }
+
+    window.api.registerGlobalShortcuts(templates).catch((error) => {
+      console.error('Error registering global shortcuts:', error)
+    })
+  }, [hasLoadedInitialData, templates])
 
   useEffect(() => {
     floatingWindowService.manageWindow(templates, pinTemplates)

@@ -196,14 +196,11 @@ function TemplateEditor({
                       </SelectItem>
                       {collections.map((collectionOption) => (
                         <SelectItem key={collectionOption} value={collectionOption}>
-                          {collectionOption}
-                        </SelectItem>
-                      ))}
+                        {collectionOption}
+                      </SelectItem>
+                    ))}
                     </SelectContent>
                   </Select>
-                  <p className="text-sm text-muted-foreground">
-                    {t('collectionOptionalDescription')}
-                  </p>
                 </div>
 
                 <div className="space-y-2">
