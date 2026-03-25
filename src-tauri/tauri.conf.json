@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Akel",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "identifier": "com.elka.akel",
   "build": {
     "beforeDevCommand": "pnpm dev",
